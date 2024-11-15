@@ -1,3 +1,4 @@
+from enum import Enum
 from syftbox.lib import Client
 from syftbox.lib import SyftPermission
 from pathlib import Path
@@ -19,6 +20,51 @@ class StateNotReady(Exception):
     pass
 
 
+class ProjectState(Enum):
+    DATASET_ADDED = "Dataset Added"
+    TRAINING_STARTED = "Training Started"
+    TRAINING_IN_PROGRESS = "Training In Progress"
+    TRAINING_COMPLETED = "Training Completed"
+
+
+def init_project_state(project_state_file: Path) -> dict:
+    """Create a initial state for the project"""
+    state = {
+        "dataset_added": False,
+        "model_train_progress": None,
+    }
+    project_state_file.write_text(json.dumps(state, indent=4))
+
+
+def create_project_state(client: Client, proj_folder: Path) -> None:
+    """Creates the state folder for the project"""
+
+    # Create a state folder to track progress of the project
+    state_folder = proj_folder / "state"
+    state_folder.mkdir(parents=True, exist_ok=True)
+
+    project_state_file = state_folder / "state.json"
+    project_state_file.touch()
+
+    # Give public read permission to the state folder for the aggregator
+    add_public_read_permission(client, state_folder)
+
+
+def update_project_state(proj_folder: Path, state: ProjectState) -> None:
+    """Updates the state of the project in the state.json file"""
+
+    state_folder = proj_folder / "state"
+    project_state_file = state_folder / "state.json"
+
+    with open(project_state_file, "r") as f:
+        project_state: dict = json.load(f)
+
+    project_state[state.name] = True
+
+    with open(project_state_file, "w") as f:
+        json.dump(project_state, f, indent=4)
+
+
 # TODO: Currently setting the permissions with public write
 # change the permission model later
 # NOTE: we mainly want the aggregator to have write access to
@@ -29,6 +75,14 @@ def add_public_write_permission(client: Client, path: Path) -> None:
     Adds public write permission to the given path
     """
     permission = SyftPermission.mine_with_public_write(client.email)
+    permission.ensure(path)
+
+
+def add_public_read_permission(client: Client, path: Path) -> None:
+    """
+    Adds public read permission to the given path
+    """
+    permission = SyftPermission.mine_with_public_read(client.email)
     permission.ensure(path)
 
 
@@ -91,6 +145,14 @@ def init_client_dirs(proj_folder: Path) -> None:
 
     add_public_write_permission(client, agg_weights_folder)
 
+    # Create a private folder for the client to place the datasets
+    pvt_data_folder = get_app_private_data(client, "fl_client") / proj_folder.name
+    pvt_data_folder.mkdir(parents=True, exist_ok=True)
+
+    # Create a state folder to track progress of the project
+    # and give public read permission to the state folder for the aggregator
+    create_project_state(client, proj_folder)
+
 
 def load_model_class(model_path: Path) -> type:
     model_class_name = "FLModel"
@@ -115,11 +177,13 @@ def train_model(client: Client, proj_folder: Path, round_num: int) -> None:
         fl_config: dict = json.load(f)
 
     # Retrieve all the mnist datasets from the private folder
-    dataset_path = get_app_private_data(client, "fl_client")
+    dataset_path = get_app_private_data(client, "fl_client") / proj_folder.name
     dataset_path_files = look_for_datasets(dataset_path)
 
     if len(dataset_path_files) == 0:
-        raise StateNotReady(f"No dataset found in private folder skipping training.")
+        raise StateNotReady("No dataset found in private folder skipping training.")
+
+    update_project_state(proj_folder, ProjectState.DATASET_ADDED)
 
     # Load the Model from the model_arch.py file
     model_class = load_model_class(proj_folder / fl_config["model_arch"])
@@ -157,6 +221,7 @@ def train_model(client: Client, proj_folder: Path, round_num: int) -> None:
     start_msg = f"[{datetime.now().isoformat()}] Starting training...\n"
     log_file.write(start_msg)
     log_file.flush()
+    update_project_state(proj_folder, ProjectState.TRAINING_STARTED)
 
     # training loop
     for epoch in range(fl_config["epoch"]):
@@ -176,6 +241,7 @@ def train_model(client: Client, proj_folder: Path, round_num: int) -> None:
         log_msg = f"[{datetime.now().isoformat()}] Epoch {epoch + 1:04d}: Loss = {avg_loss:.6f}\n"
         log_file.write(log_msg)
         log_file.flush()  # Force write to disk
+        update_project_state(proj_folder, ProjectState.TRAINING_IN_PROGRESS)
 
     # Serialize the model
     output_model_path = round_weights_folder / f"trained_model_round_{round_num}.pt"
@@ -186,6 +252,7 @@ def train_model(client: Client, proj_folder: Path, round_num: int) -> None:
     log_file.write(final_msg)
     log_file.flush()
     log_file.close()
+    update_project_state(proj_folder, ProjectState.TRAINING_COMPLETED)
 
 
 def shift_project_to_done_folder(
