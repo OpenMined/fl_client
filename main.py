@@ -20,18 +20,16 @@ class StateNotReady(Exception):
     pass
 
 
-class ProjectState(Enum):
-    DATASET_ADDED = "Dataset Added"
-    TRAINING_STARTED = "Training Started"
-    TRAINING_IN_PROGRESS = "Training In Progress"
-    TRAINING_COMPLETED = "Training Completed"
+class ProjectStateCols(Enum):
+    DATASET_ADDED = "dataset_added"
+    MODEL_TRAIN_PROGRESS = "model_train_progress"
 
 
 def init_project_state(project_state_file: Path) -> dict:
     """Create a initial state for the project"""
     state = {
-        "dataset_added": False,
-        "model_train_progress": None,
+        ProjectStateCols.DATASET_ADDED.value: False,
+        ProjectStateCols.MODEL_TRAIN_PROGRESS.value: None,
     }
     project_state_file.write_text(json.dumps(state, indent=4))
 
@@ -49,17 +47,22 @@ def create_project_state(client: Client, proj_folder: Path) -> None:
     # Give public read permission to the state folder for the aggregator
     add_public_read_permission(client, state_folder)
 
+    init_project_state(project_state_file)
 
-def update_project_state(proj_folder: Path, state: ProjectState) -> None:
+
+def update_project_state(proj_folder: Path, key: ProjectStateCols, val: str) -> None:
     """Updates the state of the project in the state.json file"""
 
     state_folder = proj_folder / "state"
     project_state_file = state_folder / "state.json"
 
-    with open(project_state_file, "r") as f:
-        project_state: dict = json.load(f)
+    project_state = {}
 
-    project_state[state.name] = True
+    if not project_state_file.is_file():
+        with open(project_state_file, "r") as f:
+            project_state = json.load(f)
+
+    project_state[key.value] = val
 
     with open(project_state_file, "w") as f:
         json.dump(project_state, f, indent=4)
@@ -183,7 +186,7 @@ def train_model(client: Client, proj_folder: Path, round_num: int) -> None:
     if len(dataset_path_files) == 0:
         raise StateNotReady("No dataset found in private folder skipping training.")
 
-    update_project_state(proj_folder, ProjectState.DATASET_ADDED)
+    update_project_state(proj_folder, ProjectStateCols.DATASET_ADDED, "True")
 
     # Load the Model from the model_arch.py file
     model_class = load_model_class(proj_folder / fl_config["model_arch"])
@@ -221,7 +224,9 @@ def train_model(client: Client, proj_folder: Path, round_num: int) -> None:
     start_msg = f"[{datetime.now().isoformat()}] Starting training...\n"
     log_file.write(start_msg)
     log_file.flush()
-    update_project_state(proj_folder, ProjectState.TRAINING_STARTED)
+    update_project_state(
+        proj_folder, ProjectStateCols.MODEL_TRAIN_PROGRESS, "Training Started"
+    )
 
     # training loop
     for epoch in range(fl_config["epoch"]):
@@ -241,7 +246,9 @@ def train_model(client: Client, proj_folder: Path, round_num: int) -> None:
         log_msg = f"[{datetime.now().isoformat()}] Epoch {epoch + 1:04d}: Loss = {avg_loss:.6f}\n"
         log_file.write(log_msg)
         log_file.flush()  # Force write to disk
-        update_project_state(proj_folder, ProjectState.TRAINING_IN_PROGRESS)
+        update_project_state(
+            proj_folder, ProjectStateCols.MODEL_TRAIN_PROGRESS, "Training InProgress"
+        )
 
     # Serialize the model
     output_model_path = round_weights_folder / f"trained_model_round_{round_num}.pt"
@@ -252,7 +259,9 @@ def train_model(client: Client, proj_folder: Path, round_num: int) -> None:
     log_file.write(final_msg)
     log_file.flush()
     log_file.close()
-    update_project_state(proj_folder, ProjectState.TRAINING_COMPLETED)
+    update_project_state(
+        proj_folder, ProjectStateCols.MODEL_TRAIN_PROGRESS, "Training Completed"
+    )
 
 
 def shift_project_to_done_folder(
