@@ -58,7 +58,7 @@ def update_project_state(proj_folder: Path, key: ProjectStateCols, val: str) -> 
 
     project_state = {}
 
-    if not project_state_file.is_file():
+    if project_state_file.is_file():
         with open(project_state_file, "r") as f:
             project_state = json.load(f)
 
