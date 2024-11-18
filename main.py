@@ -266,7 +266,7 @@ def train_model(client: Client, proj_folder: Path, round_num: int) -> None:
     update_project_state(
         proj_folder,
         ProjectStateCols.MODEL_TRAIN_PROGRESS,
-        "Training Completed for Round {round_num}",
+        f"Training Completed for Round {round_num}",
     )
 
 
