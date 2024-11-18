@@ -306,8 +306,12 @@ def advance_fl_round(client: Client, proj_folder: Path) -> None:
         fl_config: dict = json.load(f)
 
     total_rounds = fl_config["rounds"]
+
+    agg_weights_cnt = len(list(agg_weights_folder.glob("*.pt")))
     round_num = len(list(round_weights_folder.iterdir())) + 1
-    if round_num > total_rounds:
+
+    # Agg weights folder include round weights + init seed weight
+    if agg_weights_cnt == total_rounds + 1:
         print(f"FL project {proj_folder.name} has completed all the rounds")
         # TODO: move the project to the `done` folder
         # Q: Do we move them when the aggregator has sent the weights for the last round?
