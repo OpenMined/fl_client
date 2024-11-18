@@ -27,6 +27,11 @@ class ProjectStateCols(Enum):
 
 def init_project_state(project_state_file: Path) -> dict:
     """Create a initial state for the project"""
+
+    # If the state file already exists, we don't overwrite it
+    if project_state_file.is_file():
+        return
+
     state = {
         ProjectStateCols.DATASET_ADDED.value: False,
         ProjectStateCols.MODEL_TRAIN_PROGRESS.value: None,
@@ -42,7 +47,6 @@ def create_project_state(client: Client, proj_folder: Path) -> None:
     state_folder.mkdir(parents=True, exist_ok=True)
 
     project_state_file = state_folder / "state.json"
-    project_state_file.touch()
 
     # Give public read permission to the state folder for the aggregator
     add_public_read_permission(client, state_folder)
@@ -148,10 +152,6 @@ def init_client_dirs(proj_folder: Path) -> None:
 
     add_public_write_permission(client, agg_weights_folder)
 
-    # Create a private folder for the client to place the datasets
-    pvt_data_folder = get_app_private_data(client, "fl_client") / proj_folder.name
-    pvt_data_folder.mkdir(parents=True, exist_ok=True)
-
     # Create a state folder to track progress of the project
     # and give public read permission to the state folder for the aggregator
     create_project_state(client, proj_folder)
@@ -180,7 +180,7 @@ def train_model(client: Client, proj_folder: Path, round_num: int) -> None:
         fl_config: dict = json.load(f)
 
     # Retrieve all the mnist datasets from the private folder
-    dataset_path = get_app_private_data(client, "fl_client") / proj_folder.name
+    dataset_path = get_app_private_data(client, "fl_client")
     dataset_path_files = look_for_datasets(dataset_path)
 
     if len(dataset_path_files) == 0:
@@ -225,7 +225,9 @@ def train_model(client: Client, proj_folder: Path, round_num: int) -> None:
     log_file.write(start_msg)
     log_file.flush()
     update_project_state(
-        proj_folder, ProjectStateCols.MODEL_TRAIN_PROGRESS, "Training Started"
+        proj_folder,
+        ProjectStateCols.MODEL_TRAIN_PROGRESS,
+        f"Training Started for Round {round_num}",
     )
 
     # training loop
@@ -247,7 +249,9 @@ def train_model(client: Client, proj_folder: Path, round_num: int) -> None:
         log_file.write(log_msg)
         log_file.flush()  # Force write to disk
         update_project_state(
-            proj_folder, ProjectStateCols.MODEL_TRAIN_PROGRESS, "Training InProgress"
+            proj_folder,
+            ProjectStateCols.MODEL_TRAIN_PROGRESS,
+            f"Training InProgress for Round {round_num} (Curr Epoc: {epoch}/{fl_config['epoch']})",
         )
 
     # Serialize the model
@@ -260,7 +264,9 @@ def train_model(client: Client, proj_folder: Path, round_num: int) -> None:
     log_file.flush()
     log_file.close()
     update_project_state(
-        proj_folder, ProjectStateCols.MODEL_TRAIN_PROGRESS, "Training Completed"
+        proj_folder,
+        ProjectStateCols.MODEL_TRAIN_PROGRESS,
+        "Training Completed for Round {round_num}",
     )
 
 
@@ -363,7 +369,7 @@ def advance_fl_projects(client: Client) -> None:
     for proj_folder in running_folder.iterdir():
         if proj_folder.is_dir():
             proj_name = proj_folder.name
-            print(f"Advancing FL project {proj_name}")
+            print(f"Advancing FL project {proj_name} -> proj_folder: {proj_folder}")
             _advance_fl_project(client, proj_folder)
 
 
