@@ -167,7 +167,7 @@ def load_model_class(model_path: Path) -> type:
     return model_class
 
 
-def train_model(client: Client, proj_folder: Path, round_num: int) -> None:
+def train_model(proj_folder: Path, round_num: int, dataset_path_files: Path) -> None:
     """
     Trains the model for the given round number
     """
@@ -178,15 +178,6 @@ def train_model(client: Client, proj_folder: Path, round_num: int) -> None:
     fl_config_path = proj_folder / "fl_config.json"
     with open(fl_config_path, "r") as f:
         fl_config: dict = json.load(f)
-
-    # Retrieve all the mnist datasets from the private folder
-    dataset_path = get_app_private_data(client, "fl_client")
-    dataset_path_files = look_for_datasets(dataset_path)
-
-    if len(dataset_path_files) == 0:
-        raise StateNotReady("No dataset found in private folder skipping training.")
-
-    update_project_state(proj_folder, ProjectStateCols.DATASET_ADDED, "True")
 
     # Load the Model from the model_arch.py file
     model_class = load_model_class(proj_folder / fl_config["model_arch"])
@@ -318,6 +309,16 @@ def advance_fl_round(client: Client, proj_folder: Path) -> None:
         shift_project_to_done_folder(client, proj_folder, total_rounds)
         return
 
+    # Check if datasets are present in the private folder
+    # Retrieve all the mnist datasets from the private folder
+    dataset_path = get_app_private_data(client, "fl_client")
+    dataset_path_files = look_for_datasets(dataset_path)
+
+    if len(dataset_path_files) == 0:
+        raise StateNotReady("No dataset found in private folder skipping training.")
+
+    update_project_state(proj_folder, ProjectStateCols.DATASET_ADDED, "True")
+
     # Check if the aggregate has sent the weights for the previous round
     # We always use the previous round weights to train the model
     # from the agg_weights folder to train for the current round
@@ -328,7 +329,7 @@ def advance_fl_round(client: Client, proj_folder: Path) -> None:
         )
 
     # Train the model
-    train_model(client, proj_folder, round_num)
+    train_model(proj_folder, round_num, dataset_path_files)
 
     # Send the trained model to the aggregator
     aggregator_email = fl_config["aggregator"]
