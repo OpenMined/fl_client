@@ -1,2 +1,10 @@
-1. Once a user installs the `fl_client` app, it will initially have the `request/<fl_project_name>` and `running` folder under `api_data/fl_client`.
-2. To join the FL workflow, the user copies the `<fl_project_name>` from `request` to be under the `running` folder
+---
+name: fl_client
+author: "khoa@openmined.org"
+version: 0.0.1
+source: https://github.com/openmined/fl_client
+home: https://syftbox.openmined.org/datasites/khoa@openmined.org/fl/my_cool_fl_proj/
+icon: https://raw.githubusercontent.com/OpenMined/fl_client/refs/heads/main/icon.png
+---
+# fl_client
+Federated Client
