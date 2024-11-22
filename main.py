@@ -188,8 +188,7 @@ def shift_project_to_done_folder(
     b. moves the agg weights and round weights to the done folder
     c. delete the project folder from the running folder
     """
-    done_folder = client.api_data("fl_client") / "done"
-    done_proj_folder = done_folder / proj_folder.name
+    done_proj_folder = client.api_data(f"fl_client/done/{proj_folder.name}")
     done_proj_folder.mkdir(parents=True, exist_ok=True)
 
     # Move the agg weights and round weights folder to the done project folder
@@ -197,6 +196,7 @@ def shift_project_to_done_folder(
     shutil.move(proj_folder / "round_weights", done_proj_folder)
 
     # Delete the project folder from the running folder
+    print(f"Deleting project folder from the running folder: {proj_folder.resolve()}")
     shutil.rmtree(proj_folder)
 
 
@@ -216,7 +216,7 @@ def get_train_datasets(client: Client, proj_folder: Path) -> list[Path]:
     return dataset_path_files
 
 
-def has_project_completed(proj_folder: Path, total_rounds: int) -> bool:
+def has_project_completed(client: Client, proj_folder: Path, total_rounds: int) -> bool:
     """Check if the project has completed model training all the rounds."""
 
     agg_weights_folder = proj_folder / "agg_weights"
@@ -253,7 +253,7 @@ def perform_model_training(
     current_round = len(list(round_weights_folder.iterdir())) + 1
 
     # Exit if the project has completed all the rounds.
-    if has_project_completed(proj_folder, total_rounds):
+    if has_project_completed(client, proj_folder, total_rounds):
         return
 
     # Check if the aggregate has sent the weights for the previous round
