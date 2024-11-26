@@ -1,17 +1,25 @@
-from enum import Enum
-from syftbox.lib import Client
-from syftbox.lib import SyftPermission
+import importlib.util
+import shutil
+from datetime import datetime
 from pathlib import Path
-import json
-from torch.utils.data import ConcatDataset, DataLoader, TensorDataset
+
 import torch
 import torch.nn as nn
-from datetime import datetime
 import torch.optim as optim
+from syftbox.lib import Client
+from torch.utils.data import ConcatDataset, DataLoader, TensorDataset
 
-import shutil
-import re
-import importlib.util
+from utils import (
+    ProjectStateCols,
+    add_public_write_permission,
+    create_project_state,
+    get_app_private_data,
+    read_json,
+    search_files,
+    update_project_state,
+)
+
+DATASET_FILE_PATTERN = r"^mnist_label_[0-9]\.pt$"
 
 
 # Exception name to indicate the state cannot advance
@@ -20,103 +28,7 @@ class StateNotReady(Exception):
     pass
 
 
-class ProjectStateCols(Enum):
-    DATASET_ADDED = "dataset_added"
-    MODEL_TRAIN_PROGRESS = "model_train_progress"
-
-
-def init_project_state(project_state_file: Path) -> dict:
-    """Create a initial state for the project"""
-
-    # If the state file already exists, we don't overwrite it
-    if project_state_file.is_file():
-        return
-
-    state = {
-        ProjectStateCols.DATASET_ADDED.value: False,
-        ProjectStateCols.MODEL_TRAIN_PROGRESS.value: None,
-    }
-    project_state_file.write_text(json.dumps(state, indent=4))
-
-
-def create_project_state(client: Client, proj_folder: Path) -> None:
-    """Creates the state folder for the project"""
-
-    # Create a state folder to track progress of the project
-    state_folder = proj_folder / "state"
-    state_folder.mkdir(parents=True, exist_ok=True)
-
-    project_state_file = state_folder / "state.json"
-
-    # Give public read permission to the state folder for the aggregator
-    add_public_read_permission(client, state_folder)
-
-    init_project_state(project_state_file)
-
-
-def update_project_state(proj_folder: Path, key: ProjectStateCols, val: str) -> None:
-    """Updates the state of the project in the state.json file"""
-
-    state_folder = proj_folder / "state"
-    project_state_file = state_folder / "state.json"
-
-    project_state = {}
-
-    if project_state_file.is_file():
-        with open(project_state_file, "r") as f:
-            project_state = json.load(f)
-
-    project_state[key.value] = val
-
-    with open(project_state_file, "w") as f:
-        json.dump(project_state, f, indent=4)
-
-
-# TODO: Currently setting the permissions with public write
-# change the permission model later
-# NOTE: we mainly want the aggregator to have write access to
-# fl_client/request folder
-# fl_client/running/project_name/agg_weights folder
-def add_public_write_permission(client: Client, path: Path) -> None:
-    """
-    Adds public write permission to the given path
-    """
-    permission = SyftPermission.mine_with_public_write(client.email)
-    permission.ensure(path)
-
-
-def add_public_read_permission(client: Client, path: Path) -> None:
-    """
-    Adds public read permission to the given path
-    """
-    permission = SyftPermission.mine_with_public_read(client.email)
-    permission.ensure(path)
-
-
-def get_all_directories(path: Path) -> list:
-    """
-    Returns the list of directories present in the given path
-    """
-    return [x for x in path.iterdir() if x.is_dir()]
-
-
-def get_app_private_data(client: Client, app_name: str) -> Path:
-    """
-    Returns the private data directory of the app
-    """
-    return client.workspace.data_dir / "private" / app_name
-
-
-def look_for_datasets(path: Path) -> list[Path]:
-    # We return all the files in the path
-    # with a particular regex pattern like mnist_label_*.pt
-    # NOTE: this is an hardcoded pattern for demonstration purposes
-    pattern = r"^mnist_label_[0-9]\.pt$"
-    dataset_files = [f for f in path.iterdir() if re.match(pattern, f.name)]
-    return dataset_files
-
-
-def init_fl_client_app(client: Client) -> None:
+def init_client_app(client: Client) -> None:
     """
     Creates the `fl_client` app in the `api_data` folder
     with the following structure:
@@ -133,6 +45,7 @@ def init_fl_client_app(client: Client) -> None:
         fl_client_folder = fl_client / folder
         fl_client_folder.mkdir(parents=True, exist_ok=True)
 
+    # Give public write permission to the request folder
     add_public_write_permission(client, fl_client / "request")
 
     # We additionally create a private folder for the client to place the datasets
@@ -140,16 +53,21 @@ def init_fl_client_app(client: Client) -> None:
     private_folder_path.mkdir(parents=True, exist_ok=True)
 
 
-def init_client_dirs(proj_folder: Path) -> None:
+def init_shared_dirs(client: Client, proj_folder: Path) -> None:
+    """Creates the shared directories for the project.
+    These directories are shared between the client and the aggregator.
+    a. round_weights
+    b. agg_weights
+    c. state
     """
-    Step 1: Ensure the project has init directories (like round_weights, agg_weights)
-    """
+
     round_weights_folder = proj_folder / "round_weights"
     agg_weights_folder = proj_folder / "agg_weights"
 
     round_weights_folder.mkdir(parents=True, exist_ok=True)
     agg_weights_folder.mkdir(parents=True, exist_ok=True)
 
+    # Give public write permission to the round_weights and agg_weights folder
     add_public_write_permission(client, agg_weights_folder)
 
     # Create a state folder to track progress of the project
@@ -158,6 +76,7 @@ def init_client_dirs(proj_folder: Path) -> None:
 
 
 def load_model_class(model_path: Path) -> type:
+    """Load the model class from the model_arch.py file"""
     model_class_name = "FLModel"
     spec = importlib.util.spec_from_file_location(model_path.stem, model_path)
     model_arch = importlib.util.module_from_spec(spec)
@@ -176,8 +95,7 @@ def train_model(proj_folder: Path, round_num: int, dataset_path_files: Path) -> 
     agg_weights_folder = proj_folder / "agg_weights"
 
     fl_config_path = proj_folder / "fl_config.json"
-    with open(fl_config_path, "r") as f:
-        fl_config: dict = json.load(f)
+    fl_config = read_json(fl_config_path)
 
     # Load the Model from the model_arch.py file
     model_class = load_model_class(proj_folder / fl_config["model_arch"])
@@ -270,8 +188,7 @@ def shift_project_to_done_folder(
     b. moves the agg weights and round weights to the done folder
     c. delete the project folder from the running folder
     """
-    done_folder = client.api_data("fl_client") / "done"
-    done_proj_folder = done_folder / proj_folder.name
+    done_proj_folder = client.api_data(f"fl_client/done/{proj_folder.name}")
     done_proj_folder.mkdir(parents=True, exist_ok=True)
 
     # Move the agg weights and round weights folder to the done project folder
@@ -279,10 +196,47 @@ def shift_project_to_done_folder(
     shutil.move(proj_folder / "round_weights", done_proj_folder)
 
     # Delete the project folder from the running folder
+    print(f"Deleting project folder from the running folder: {proj_folder.resolve()}")
     shutil.rmtree(proj_folder)
 
 
-def advance_fl_round(client: Client, proj_folder: Path) -> None:
+def get_train_datasets(client: Client, proj_folder: Path) -> list[Path]:
+    # Check if datasets are present in the private folder
+    dataset_path = get_app_private_data(client, "fl_client")
+    dataset_path_files = search_files(DATASET_FILE_PATTERN, dataset_path)
+
+    if len(dataset_path_files) == 0:
+        raise StateNotReady(
+            f"⛔ No dataset found in private folder: {dataset_path.resolve()}"
+            "Skipping training "
+        )
+
+    update_project_state(proj_folder, ProjectStateCols.DATASET_ADDED, True)
+
+    return dataset_path_files
+
+
+def has_project_completed(client: Client, proj_folder: Path, total_rounds: int) -> bool:
+    """Check if the project has completed model training all the rounds."""
+
+    agg_weights_folder = proj_folder / "agg_weights"
+    agg_weights_cnt = len(list(agg_weights_folder.glob("*.pt")))
+
+    # Aggregated weights folder include round weights + init seed weight
+    # If aggregated weights for all rounds are present, then the project is completed
+    if agg_weights_cnt == total_rounds + 1:
+        print(f"FL project {proj_folder.name} has completed all the rounds ✅ 🚀")
+        shift_project_to_done_folder(client, proj_folder, total_rounds)
+        return True
+
+    return False
+
+
+def perform_model_training(
+    client: Client,
+    proj_folder: Path,
+    dataset_files: list[Path],
+) -> None:
     """
     Step 2: Has the aggregate sent the weights for the current round x (in the agg_weights folder)
     b. The client trains the model on the given round  and places the trained model in the round_weights folder
@@ -293,49 +247,48 @@ def advance_fl_round(client: Client, proj_folder: Path) -> None:
     agg_weights_folder = proj_folder / "agg_weights"
 
     fl_config_path = proj_folder / "fl_config.json"
-    with open(fl_config_path, "r") as f:
-        fl_config: dict = json.load(f)
+    fl_config = read_json(fl_config_path)
 
     total_rounds = fl_config["rounds"]
+    current_round = len(list(round_weights_folder.iterdir())) + 1
 
-    agg_weights_cnt = len(list(agg_weights_folder.glob("*.pt")))
-    round_num = len(list(round_weights_folder.iterdir())) + 1
-
-    # Agg weights folder include round weights + init seed weight
-    if agg_weights_cnt == total_rounds + 1:
-        print(f"FL project {proj_folder.name} has completed all the rounds")
-        # TODO: move the project to the `done` folder
-        # Q: Do we move them when the aggregator has sent the weights for the last round?
-        shift_project_to_done_folder(client, proj_folder, total_rounds)
+    # Exit if the project has completed all the rounds.
+    if has_project_completed(client, proj_folder, total_rounds):
         return
-
-    # Check if datasets are present in the private folder
-    # Retrieve all the mnist datasets from the private folder
-    dataset_path = get_app_private_data(client, "fl_client")
-    dataset_path_files = look_for_datasets(dataset_path)
-
-    if len(dataset_path_files) == 0:
-        raise StateNotReady("No dataset found in private folder skipping training.")
-
-    update_project_state(proj_folder, ProjectStateCols.DATASET_ADDED, "True")
 
     # Check if the aggregate has sent the weights for the previous round
     # We always use the previous round weights to train the model
     # from the agg_weights folder to train for the current round
-    agg_weights_file = agg_weights_folder / f"agg_model_round_{round_num - 1}.pt"
+    agg_weights_file = agg_weights_folder / f"agg_model_round_{current_round - 1}.pt"
     if not agg_weights_file.is_file():
         raise StateNotReady(
-            f"Aggregator has not sent the weights for the round {round_num}"
+            f"Aggregator has not sent the weights for the round {current_round}"
         )
 
-    # Train the model
-    train_model(proj_folder, round_num, dataset_path_files)
+    # Train the model for the given FL round
+    train_model(proj_folder, current_round, dataset_files)
 
-    # Send the trained model to the aggregator
-    aggregator_email = fl_config["aggregator"]
-    trained_model_file = round_weights_folder / f"trained_model_round_{round_num}.pt"
+    # Share the trained model to the aggregator
+    trained_model_file = (
+        round_weights_folder / f"trained_model_round_{current_round}.pt"
+    )
+    share_model_to_aggregator(
+        client,
+        fl_config["aggregator"],
+        proj_folder,
+        trained_model_file,
+    )
+
+
+def share_model_to_aggregator(
+    client: Client,
+    aggregator_email: str,
+    proj_folder: Path,
+    model_file: Path,
+) -> None:
+    """Shares the trained model to the aggregator."""
     fl_aggregator_app_path = (
-        client.datasites / aggregator_email / "api_data" / "fl_aggregator"
+        client.datasites / f"{aggregator_email}/api_data/fl_aggregator"
     )
     fl_aggregator_running_folder = fl_aggregator_app_path / "running" / proj_folder.name
     fl_aggregator_client_path = (
@@ -343,7 +296,7 @@ def advance_fl_round(client: Client, proj_folder: Path) -> None:
     )
 
     # Copy the trained model to the aggregator's client folder
-    shutil.copy(trained_model_file, fl_aggregator_client_path)
+    shutil.copy(model_file, fl_aggregator_client_path)
 
 
 def _advance_fl_project(client: Client, proj_folder: Path) -> None:
@@ -357,9 +310,14 @@ def _advance_fl_project(client: Client, proj_folder: Path) -> None:
     """
 
     try:
-        init_client_dirs(proj_folder)
+        # Init the shared directories for the project
+        init_shared_dirs(client, proj_folder)
 
-        advance_fl_round(client, proj_folder)
+        # Retrieve datasets from the private folder if available
+        dataset_files = get_train_datasets(client, proj_folder)
+
+        # Train the model for the given FL round
+        perform_model_training(client, proj_folder, dataset_files)
 
     except StateNotReady as e:
         print(e)
@@ -374,16 +332,22 @@ def advance_fl_projects(client: Client) -> None:
     for proj_folder in running_folder.iterdir():
         if proj_folder.is_dir():
             proj_name = proj_folder.name
-            print(f"Advancing FL project {proj_name} -> proj_folder: {proj_folder}")
+            print(
+                f"Advancing FL project {proj_name} -> proj_folder: {proj_folder.resolve()}"
+            )
             _advance_fl_project(client, proj_folder)
 
 
-if __name__ == "__main__":
+def start_app():
     client = Client.load()
 
     # Step 1: Init the FL Aggregator App
-    init_fl_client_app(client)
+    init_client_app(client)
 
     # Step 2: Advance the FL Projects.
     # Iterates over the running folder and tries to advance the FL project
     advance_fl_projects(client)
+
+
+if __name__ == "__main__":
+    start_app()
