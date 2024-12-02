@@ -76,7 +76,7 @@ def init_shared_dirs(client: Client, proj_folder: Path) -> None:
 
 
 def load_model_class(model_path: Path) -> type:
-    """Load the model class from the model_arch.py file"""
+    """Load the model class from the model architecture file"""
     model_class_name = "FLModel"
     spec = importlib.util.spec_from_file_location(model_path.stem, model_path)
     model_arch = importlib.util.module_from_spec(spec)
@@ -97,7 +97,7 @@ def train_model(proj_folder: Path, round_num: int, dataset_path_files: Path) -> 
     fl_config_path = proj_folder / "fl_config.json"
     fl_config = read_json(fl_config_path)
 
-    # Load the Model from the model_arch.py file
+    # Load the Model from the model_arch filename
     model_class = load_model_class(proj_folder / fl_config["model_arch"])
     model: nn.Module = model_class()
 
