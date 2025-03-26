@@ -6,7 +6,8 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from syftbox.lib import Client
+from syft_core import Client
+from syft_core.permissions import SyftPermission
 from torch.utils.data import ConcatDataset, DataLoader, TensorDataset
 
 from utils import (
