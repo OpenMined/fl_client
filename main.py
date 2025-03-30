@@ -6,7 +6,8 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from syftbox.lib import Client
+from syft_core import Client
+from syft_core.permissions import SyftPermission
 from torch.utils.data import ConcatDataset, DataLoader, TensorDataset
 
 from utils import (
@@ -30,16 +31,16 @@ class StateNotReady(Exception):
 
 def init_client_app(client: Client) -> None:
     """
-    Creates the `fl_client` app in the `api_data` folder
+    Creates the `fl_client` app in the `app_data` folder
     with the following structure:
     ```
-    api_data
+    app_data
     └── fl_client
             └── request
             └── running
     ```
     """
-    fl_client = client.api_data("fl_client")
+    fl_client = client.app_data("fl_client")
 
     for folder in ["request", "running", "done"]:
         fl_client_folder = fl_client / folder
@@ -188,7 +189,7 @@ def shift_project_to_done_folder(
     b. moves the agg weights and round weights to the done folder
     c. delete the project folder from the running folder
     """
-    done_proj_folder = client.api_data(f"fl_client/done/{proj_folder.name}")
+    done_proj_folder = client.app_data(f"fl_client/done/{proj_folder.name}")
     done_proj_folder.mkdir(parents=True, exist_ok=True)
 
     # Move the agg weights and round weights folder to the done project folder
@@ -288,7 +289,7 @@ def share_model_to_aggregator(
 ) -> None:
     """Shares the trained model to the aggregator."""
     fl_aggregator_app_path = (
-        client.datasites / f"{aggregator_email}/api_data/fl_aggregator"
+        client.datasites / f"{aggregator_email}/app_data/fl_aggregator"
     )
     fl_aggregator_running_folder = fl_aggregator_app_path / "running" / proj_folder.name
     fl_aggregator_client_path = (
@@ -328,7 +329,7 @@ def advance_fl_projects(client: Client) -> None:
     """
     Iterates over the `running` folder and tries to advance the FL projects
     """
-    running_folder = client.api_data("fl_client") / "running"
+    running_folder = client.app_data("fl_client") / "running"
     for proj_folder in running_folder.iterdir():
         if proj_folder.is_dir():
             proj_name = proj_folder.name
