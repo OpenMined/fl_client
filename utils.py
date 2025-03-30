@@ -3,7 +3,8 @@ import re
 from enum import Enum
 from pathlib import Path
 
-from syftbox.lib import Client, SyftPermission
+from syft_core import Client
+from syft_core.permissions import SyftPermission
 
 
 class ProjectStateCols(Enum):
